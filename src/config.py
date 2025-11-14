@@ -9,3 +9,6 @@ class Config:
     pytesseract.pytesseract.tesseract_cmd = r'C:\Tesseract-OCR\tesseract.exe'
 
     POSSIBLE_NUMBERS: Set[int] = set(range(37))
+
+    MAX_HISTORY_SIZE = 500
+    HISTORY_FILE_PATH = 'history.txt'

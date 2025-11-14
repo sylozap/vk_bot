@@ -5,6 +5,8 @@ from image_processor import ImageProcessor
 from config import Config
 from statistics_tracker import StatisticsTracker
 from typing import List
+import requests
+import time
 
 
 class VkBot:
@@ -16,9 +18,39 @@ class VkBot:
         self.image_processor = ImageProcessor()
         self.stats_tracker = StatisticsTracker()
         self.bot_id = -int(group_id)
-        self.history: List[int] = []
-        # ИЗМЕНЕНИЕ 1: Добавляем счетчик сообщений от бандита
-        self.bandit_message_count = 0
+
+        # ИЗМЕНЕНИЕ 2: Загружаем историю из файла при старте
+        self.history: List[int] = self._load_history()
+        # Инициализируем счетчик на основе длины загруженной истории
+        self.bandit_message_count = len(self.history)
+        print(f"История успешно загружена. Всего записей: {len(self.history)}")
+
+
+    # ИЗМЕНЕНИЕ 3: Новый метод для загрузки истории из файла
+    def _load_history(self) -> List[int]:
+        """Загружает историю чисел из файла. Если файла нет, возвращает пустой список."""
+        try:
+            with open(Config.HISTORY_FILE_PATH, 'r') as f:
+                # Считываем строки, убираем пробелы/переносы и преобразуем в числа
+                numbers = [int(line.strip()) for line in f if line.strip()]
+                return numbers
+        except FileNotFoundError:
+            print("Файл истории не найден. Начинаем с пустой истории.")
+            return []
+        except Exception as e:
+            print(f"Ошибка при загрузке истории: {e}. Начинаем с пустой истории.")
+            return []
+
+    # ИЗМЕНЕНИЕ 4: Новый метод для сохранения истории в файл
+    def _save_history(self):
+        """Сохраняет текущий список истории в файл."""
+        try:
+            with open(Config.HISTORY_FILE_PATH, 'w') as f:
+                for number in self.history:
+                    f.write(str(number) + '\n')
+        except Exception as e:
+            print(f"Критическая ошибка при сохранении истории в файл: {e}")
+
 
     def send_message(self, chat_id: int, message: str):
         try:
@@ -43,29 +75,43 @@ class VkBot:
         if sender_id == Config.BANDIT_ID:
             number = self.image_processor.get_number_from_vk_message(message)
             if number is not None:
-                # 1. Добавляем новое число в историю
+                # --- ИЗМЕНЕНИЕ 5: Обновленная логика обработки нового числа ---
+
+                # 1. Добавляем новое число в конец списка
                 self.history.append(number)
 
-                # ИЗМЕНЕНИЕ 2: Увеличиваем счетчик на 1 после каждого распознанного числа
-                self.bandit_message_count += 1
-                print(f"Распознано число: {number}. Сообщений от бандита: {self.bandit_message_count}.")
+                # 2. Если история превысила лимит, удаляем самый старый элемент (первый)
+                if len(self.history) > Config.MAX_HISTORY_SIZE:
+                    self.history.pop(0)
 
-                # ИЗМЕНЕНИЕ 3: Проверяем, кратно ли число сообщений 10
+                # 3. Сохраняем обновленную историю в файл
+                self._save_history()
+
+                # 4. Увеличиваем общий счетчик
+                self.bandit_message_count += 1
+                print(f"Распознано число: {number}. Сообщений от бандита: {self.bandit_message_count}. Записей в истории: {len(self.history)}")
+
+                # 5. Отправляем отчет каждые 10 сообщений
                 if self.bandit_message_count % 10 == 0:
                     print("Отправка статистики: количество сообщений достигло 10.")
-                    # 2. Получаем аналитический отчет
                     report = self.stats_tracker.get_rarity_report(self.history, Config.POSSIBLE_NUMBERS)
-
-                    # 3. Отправляем отчет в чат
                     self.send_message(chat_id, report)
             else:
                 print("Не удалось распознать число из изображения.")
 
     def run(self):
         print("Бот запущен! Жду событий...")
-        for event in self.longpoll.listen():
-            if event.type == VkBotEventType.MESSAGE_NEW:
-                try:
-                    self._handle_new_message(event)
-                except Exception as e:
-                    print(f"Критическая ошибка при обработке события: {e}")
+        while True:
+            try:
+                for event in self.longpoll.listen():
+                    if event.type == VkBotEventType.MESSAGE_NEW:
+                        try:
+                            self._handle_new_message(event)
+                        except Exception as e:
+                            print(f"Критическая ошибка при обработке СОБЫТИЯ: {e}")
+            except requests.exceptions.ReadTimeout:
+                print("Переподключение к Long Poll серверу VK после тайм-аута...")
+                time.sleep(1)
+            except Exception as e:
+                print(f"Произошла критическая ошибка в цикле longpoll: {e}")
+                time.sleep(15)
